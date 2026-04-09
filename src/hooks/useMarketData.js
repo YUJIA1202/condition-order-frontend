@@ -4,11 +4,12 @@ import { useState, useEffect, useRef } from "react";
 const WS_URL = "ws://localhost:8000/ws";
 
 export function useMarketData() {
-  const [indices,          setIndices]          = useState([]);
-  const [triggered,        setTriggered]        = useState([]);
-  const [volumeTriggered,  setVolumeTriggered]  = useState([]);  // 量能条件单事件日志
-  const [stockTicks,       setStockTicks]       = useState({});  // {code: tick}
-  const [connected,        setConnected]        = useState(false);
+  const [indices,         setIndices]         = useState([]);
+  const [triggered,       setTriggered]       = useState([]);
+  const [volumeTriggered, setVolumeTriggered] = useState([]);
+  const [stockTicks,      setStockTicks]      = useState({});
+  const [sectors,         setSectors]         = useState([]);
+  const [connected,       setConnected]       = useState(false);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -31,6 +32,7 @@ export function useMarketData() {
           if (data.type === "market") {
             setIndices(data.indices || []);
             setStockTicks(data.stock_ticks || {});
+            setSectors(data.sectors || []);
 
             if (data.triggered?.length > 0) {
               setTriggered(prev => [...data.triggered, ...prev].slice(0, 50));
@@ -67,5 +69,5 @@ export function useMarketData() {
     };
   }, []);
 
-  return { indices, triggered, volumeTriggered, stockTicks, connected };
+  return { indices, triggered, volumeTriggered, stockTicks, sectors, connected };
 }

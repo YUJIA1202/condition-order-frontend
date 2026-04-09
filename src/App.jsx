@@ -121,7 +121,7 @@ export default function App() {
   const [time, setTime]       = useState("");
   const [selectedETF, setSelectedETF] = useState(null);
 
-  const { indices, triggered, volumeTriggered, stockTicks, connected } = useMarketData();
+  const { indices, triggered, volumeTriggered, stockTicks, sectors, connected } = useMarketData();
   const t = THEMES[dark ? "dark" : "light"];
 
   useEffect(() => {
@@ -152,7 +152,7 @@ export default function App() {
         dark={dark} setDark={setDark} time={time}
         subPage={subPage} setSubPage={setSubPage}/>
       <div key={page+subPage} style={{animation:"fadeUp 0.2s ease"}}>
-        {page==="home"             && <HomePage           indices={indices} t={t}/>}
+        {page==="home"             && <HomePage           indices={indices} sectors={sectors} t={t}/>}
         {page==="index-condition"  && <IndexConditionPage indices={indices} triggered={triggered} t={t}/>}
         {page==="volume-condition" && <VolumeConditionPage stockTicks={stockTicks} volumeTriggered={volumeTriggered} t={t}/>}
         {page==="position"         && <PositionPage        t={t}/>}
