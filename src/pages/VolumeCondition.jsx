@@ -501,7 +501,7 @@ export default function VolumeConditionPage({ stockTicks, volumeTriggered, t }) 
               </div>
             )}
             <input type="number" step="100" min="100" value={qty}
-              onChange={e => setQty(e.target.value)} placeholder="数量（股）"
+              onChange={e => setQty(e.target.value)} placeholder="数量（手）"
               style={{
                 padding: "8px 10px", borderRadius: 6,
                 background: t.surface, border: `1px solid ${t.border}`,
@@ -633,7 +633,7 @@ export default function VolumeConditionPage({ stockTicks, volumeTriggered, t }) 
                     {cond.op === "lte" ? "≤" : "≥"} {fmt(cond.trigger_price)}
                   </span></span>
                   <span style={{ color: t.muted }}>数量 <span style={{ color: t.text, fontWeight: 600 }}>
-                    {cond.qty.toLocaleString()}股
+                    {cond.qty.toLocaleString()}手
                   </span></span>
                   <span style={{ color: t.muted }}>量比阈值 <span style={{ color: t.accent, fontWeight: 600 }}>
                     {cond.vol_ratio_threshold}x
