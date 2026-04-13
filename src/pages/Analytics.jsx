@@ -1,357 +1,284 @@
 // src/pages/Analytics.jsx
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as echarts from "echarts";
 import { getPositions } from "../api/index";
 
+const API    = "http://localhost:8000";
 function fmt(n, d=2) { return Number(n).toFixed(d); }
 function pct(v, d=2) { return (v>=0?"+":"")+fmt(v,d)+"%"; }
-function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
-const NOW = Date.now();
 
-function genHistory(days=365, totalCost=10000) {
-  const result = [];
-  let portfolio=100, shanghai=100, hs300=100;
-  for(let i=0; i<days; i++) {
-    portfolio *= (1+(Math.random()-0.47)*0.015);
-    shanghai  *= (1+(Math.random()-0.48)*0.010);
-    hs300     *= (1+(Math.random()-0.475)*0.011);
-    const d = new Date(NOW-(days-i)*86400000);
-    const dailyPct = (Math.random()-0.47)*1.5;
-    result.push({
-      date:  d.toISOString().slice(0,10),
-      month: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`,
-      week:  `${d.getFullYear()}-W${String(Math.ceil(d.getDate()/7)).padStart(2,"0")}`,
-      year:  String(d.getFullYear()),
-      portfolio, shanghai, hs300,
-      dailyPnl: (dailyPct/100)*totalCost,
-      dailyPct,
-    });
-  }
-  return result;
+const BLUE   = "#1d4ed8";
+const RED    = "#dc2626";
+const MUTED  = "#94a3b8";
+const BORDER = "#e2e8f0";
+const CARD   = "#ffffff";
+const SURF   = "#f8fafc";
+const TEXT   = "#0f172a";
+
+const dotColors = [BLUE, "#7c3aed", "#0891b2", "#d97706", "#16a34a"];
+
+function fullCode(code) {
+  if(!code||code.includes(".")) return code;
+  if(code.startsWith("6")||code.startsWith("5")) return code+".SH";
+  return code+".SZ";
 }
 
-function aggregate(history, groupKey) {
-  const map = {};
-  history.forEach(d => {
-    const key = d[groupKey];
-    if(!map[key]) map[key] = {
-      date:key, pnl:0, pct:0,
-      portfolioStart:d.portfolio, portfolioEnd:d.portfolio,
-      shanghaiStart:d.shanghai,   shanghaiEnd:d.shanghai,
-      hs300Start:d.hs300,         hs300End:d.hs300,
-    };
-    map[key].pnl += d.dailyPnl;
-    map[key].pct += d.dailyPct;
-    map[key].portfolioEnd = d.portfolio;
-    map[key].shanghaiEnd  = d.shanghai;
-    map[key].hs300End     = d.hs300;
-  });
-  return Object.values(map);
-}
-
-function ReturnChart({ data, mode, showField, t, height=260 }) {
-  const canvasRef = useRef();
-  const [tooltip, setTooltip] = useState(null);
-
-  const draw = useCallback((hoverIdx=-1) => {
-    const canvas=canvasRef.current; if(!canvas||!data.length) return;
-    const dpr=window.devicePixelRatio||1;
-    const W=canvas.offsetWidth, H=canvas.offsetHeight;
-    canvas.width=W*dpr; canvas.height=H*dpr;
-    const ctx=canvas.getContext("2d"); ctx.scale(dpr,dpr);
-    ctx.fillStyle=t.card; ctx.fillRect(0,0,W,H);
-    const pad={l:68,r:16,t:16,b:32};
-    const cW=W-pad.l-pad.r, cH=H-pad.t-pad.b;
-    const vals=data.map(d=>showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct));
-    const maxV=Math.max(...vals.map(Math.abs))*1.2||1;
-    const minV=-maxV, range=maxV-minV;
-    const toY=v=>pad.t+((maxV-v)/range)*cH;
-    const toX=i=>pad.l+(i/(data.length-1||1))*cW;
-
-    ctx.strokeStyle=t.border; ctx.lineWidth=0.5;
-    for(let g=0;g<=4;g++){
-      const y=pad.t+(g/4)*cH;
-      ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cW,y); ctx.stroke();
-      const lbl=showField==="pnl"?`¥${fmt(maxV-(g/4)*range,0)}`:pct(maxV-(g/4)*range,1);
-      ctx.fillStyle=t.muted; ctx.font="12px monospace"; ctx.textAlign="right";
-      ctx.fillText(lbl,pad.l-6,y+3);
-    }
-    const zy=toY(0);
-    ctx.save(); ctx.strokeStyle=t.muted+"88"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-    ctx.beginPath(); ctx.moveTo(pad.l,zy); ctx.lineTo(pad.l+cW,zy); ctx.stroke();
-    ctx.restore();
-    const step=Math.ceil(data.length/8);
-    data.forEach((d,i)=>{
-      if(i%step===0){
-        ctx.fillStyle=t.muted; ctx.font="12px monospace"; ctx.textAlign="center";
-        ctx.fillText(d.date.slice(5),toX(i),H-6);
-      }
-    });
-    if(mode==="bar"){
-      const bw=Math.max(2,cW/data.length*0.7);
-      data.forEach((d,i)=>{
-        const v=showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct);
-        const color=v>=0?t.pos:t.neg;
-        ctx.fillStyle=i===hoverIdx?color:color+"bb";
-        ctx.fillRect(toX(i)-bw/2,Math.min(zy,toY(v)),bw,Math.abs(toY(v)-zy)||1);
-      });
-    } else {
-      const pts=data.map((d,i)=>({
-        x:toX(i),
-        y:toY(showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct)),
-        v:showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct),
-      }));
-      const fc=t.accent;
-      const grd=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);
-      grd.addColorStop(0,fc+"44"); grd.addColorStop(1,fc+"04");
-      ctx.beginPath();
-      pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-      ctx.lineTo(pts[pts.length-1].x,zy); ctx.lineTo(pts[0].x,zy); ctx.closePath();
-      ctx.fillStyle=grd; ctx.fill();
-      ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-      ctx.strokeStyle=fc; ctx.lineWidth=2; ctx.stroke();
-      if(hoverIdx>=0&&hoverIdx<pts.length){
-        const p=pts[hoverIdx];
-        ctx.beginPath(); ctx.arc(p.x,p.y,5,0,Math.PI*2);
-        ctx.fillStyle=fc; ctx.fill();
-        ctx.strokeStyle=t.card; ctx.lineWidth=2; ctx.stroke();
-      }
-    }
-    if(hoverIdx>=0){
-      const x=toX(hoverIdx);
-      ctx.save(); ctx.strokeStyle=t.muted+"66"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.moveTo(x,pad.t); ctx.lineTo(x,pad.t+cH); ctx.stroke();
-      ctx.restore();
-    }
-  },[data,mode,showField,t]);
-
-  useEffect(()=>{draw();},[draw]);
+// ─── 迷你折线图 ──────────────────────────────────────────────────
+function SparkLine({ code }) {
+  const ref = useRef();
   useEffect(()=>{
-    const ro=new ResizeObserver(()=>draw());
-    if(canvasRef.current) ro.observe(canvasRef.current);
-    return ()=>ro.disconnect();
-  },[draw]);
+    if(!code||!ref.current) return;
+    fetch(`${API}/kline/${fullCode(code)}?period=1d&count=30`)
+      .then(r=>r.json())
+      .then(bars=>{
+        if(!bars.length||!ref.current) return;
+        const chart = echarts.init(ref.current);
+        const vals  = bars.map(b=>b.c);
+        const isUp  = vals[vals.length-1]>=vals[0];
+        const c     = isUp?BLUE:RED;
+        chart.setOption({
+          backgroundColor:"transparent",
+          grid:{left:0,right:0,top:2,bottom:2},
+          xAxis:{type:"category",show:false,data:vals.map((_,i)=>i)},
+          yAxis:{type:"value",show:false,scale:true},
+          series:[{data:vals,type:"line",smooth:true,symbol:"none",
+            lineStyle:{color:c,width:1.5},
+            areaStyle:{color:{type:"linear",x:0,y:0,x2:0,y2:1,
+              colorStops:[{offset:0,color:c+"44"},{offset:1,color:c+"05"}]}}}],
+          tooltip:{show:false},
+        });
+        const ro=new ResizeObserver(()=>chart.resize());
+        ro.observe(ref.current);
+        return ()=>{ chart.dispose(); ro.disconnect(); };
+      }).catch(()=>{});
+  },[code]);
+  return <div ref={ref} style={{width:"100%",height:"100%"}}/>;
+}
 
-  const onMouseMove=useCallback(e=>{
-    const canvas=canvasRef.current; if(!canvas) return;
-    const rect=canvas.getBoundingClientRect();
-    const x=e.clientX-rect.left-68;
-    const idx=clamp(Math.round((x/(canvas.offsetWidth-84))*(data.length-1)),0,data.length-1);
-    draw(idx);
-    const d=data[idx];
-    const v=showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct);
-    setTooltip({date:d.date,v,x:e.clientX-rect.left,y:e.clientY-rect.top});
-  },[draw,data,showField]);
+// ─── 仓位分布饼图 ─────────────────────────────────────────────────
+function PieChart({ positions, height=200 }) {
+  const ref = useRef();
+  useEffect(()=>{
+    if(!positions.length||!ref.current) return;
+    const chart = echarts.init(ref.current);
+    chart.setOption({
+      backgroundColor:"transparent",
+      tooltip:{
+        trigger:"item",
+        formatter:p=>`${p.name}<br/>¥${fmt(p.value,0)} (${fmt(p.percent,1)}%)`,
+      },
+      series:[{
+        type:"pie",radius:["45%","75%"],
+        center:["50%","50%"],
+        data:positions.map((p,i)=>({
+          name:p.name||p.code,
+          value:+(p.qty*p.price).toFixed(0),
+          itemStyle:{color:dotColors[i%5]},
+        })),
+        label:{
+          show:true,fontSize:11,
+          formatter:p=>`${p.name}\n${fmt(p.percent,1)}%`,
+          color:TEXT,
+        },
+        emphasis:{
+          itemStyle:{shadowBlur:8,shadowColor:"rgba(0,0,0,0.1)"},
+        },
+      }],
+    });
+    const ro=new ResizeObserver(()=>chart.resize());
+    ro.observe(ref.current);
+    return ()=>{ chart.dispose(); ro.disconnect(); };
+  },[positions]);
+  return <div ref={ref} style={{width:"100%",height}}/>;
+}
 
-  const onMouseLeave=useCallback(()=>{draw(-1);setTooltip(null);},[draw]);
+// ─── 持仓卡片 ────────────────────────────────────────────────────
+function PositionCard({ pos, idx, totalVal, onKline, onPnl }) {
+  const pnl   = (pos.price-pos.cost)*pos.qty;
+  const pp    = ((pos.price-pos.cost)/pos.cost)*100;
+  const mv    = pos.qty*pos.price;
+  const w     = totalVal>0?(mv/totalVal)*100:0;
+  const up    = pnl>=0;
+  const color = dotColors[idx%5];
 
   return (
-    <div style={{position:"relative",width:"100%",height}}>
-      <canvas ref={canvasRef}
-        style={{display:"block",width:"100%",height:"100%",cursor:"crosshair"}}
-        onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}/>
-      {tooltip&&(
-        <div style={{position:"absolute",
-          left:clamp(tooltip.x+14,0,260),top:clamp(tooltip.y-50,0,height-70),
-          background:t.surface,border:`1px solid ${t.border}`,borderRadius:8,
-          padding:"8px 12px",fontSize:13,fontFamily:"monospace",
-          pointerEvents:"none",zIndex:10}}>
-          <div style={{color:t.muted,marginBottom:3}}>{tooltip.date}</div>
-          <div style={{color:tooltip.v>=0?t.pos:t.neg,fontWeight:700}}>
-            {showField==="pnl"?`${tooltip.v>=0?"+":""}¥${fmt(tooltip.v)}`:pct(tooltip.v)}
+    <div style={{
+      background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:14,
+      overflow:"hidden",boxShadow:"0 2px 12px rgba(0,0,0,0.04)",
+      borderLeft:`4px solid ${color}`,
+      transition:"box-shadow 0.2s",
+    }}
+      onMouseEnter={e=>e.currentTarget.style.boxShadow="0 4px 24px rgba(29,78,216,0.12)"}
+      onMouseLeave={e=>e.currentTarget.style.boxShadow="0 2px 12px rgba(0,0,0,0.04)"}
+    >
+      <div style={{padding:"16px 20px 12px",display:"flex",
+        justifyContent:"space-between",alignItems:"flex-start"}}>
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+            <span style={{fontSize:16,fontWeight:900,fontFamily:"monospace",color:BLUE}}>
+              {pos.code}
+            </span>
+            <span style={{fontSize:12,color:MUTED}}>{pos.name}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"baseline",gap:10}}>
+            <span style={{fontSize:24,fontWeight:900,fontFamily:"monospace",
+              color:up?BLUE:RED}}>{up?"+":""}¥{fmt(pnl)}</span>
+            <span style={{fontSize:13,fontFamily:"monospace",fontWeight:700,
+              color:up?BLUE:RED,background:up?"#eff6ff":"#fff5f5",
+              padding:"2px 8px",borderRadius:6}}>{pct(pp)}</span>
           </div>
         </div>
-      )}
-    </div>
-  );
-}
+        <div style={{width:120,height:50}}><SparkLine code={pos.code}/></div>
+      </div>
 
-export default function AnalyticsPage({ t, onETFDetail, onETFKline }) {
-  const [positions, setPositions] = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [period,    setPeriod]    = useState("day");
-  const [chartMode, setChartMode] = useState("line");
-  const [showField, setShowField] = useState("pnl");
-  const [rangeIdx,  setRangeIdx]  = useState(1);
-
-  useEffect(()=>{
-    getPositions().then(data=>{
-      // 直接用全部持仓，不过滤，个股ETF都显示
-      setPositions(data.map(p=>({ ...p, buyDate: p.buyDate || "2024-01-01" })));
-      setLoading(false);
-    }).catch(e=>{
-      console.error(e);
-      setLoading(false);
-    });
-  },[]);
-
-  const ranges=[
-    {label:"1月",days:30},{label:"3月",days:90},
-    {label:"6月",days:180},{label:"1年",days:365},
-  ];
-
-  const totalCost = positions.reduce((s,p)=>s+p.qty*p.cost, 0);
-  const totalVal  = positions.reduce((s,p)=>s+p.qty*p.price, 0);
-  const totalPnl  = totalVal - totalCost;
-  const totalPct  = totalCost > 0 ? (totalPnl/totalCost)*100 : 0;
-
-  // 收益走势用真实持仓总成本生成（走势本身仍是模拟，因为没有历史成交数据）
-  const HISTORY = useMemo(()=>genHistory(365, totalCost||10000),[totalCost]);
-  const visibleHistory = useMemo(()=>HISTORY.slice(-ranges[rangeIdx].days),[rangeIdx,HISTORY]);
-  const periodData = useMemo(()=>{
-    if(period==="day")   return visibleHistory;
-    if(period==="week")  return aggregate(visibleHistory,"week");
-    if(period==="month") return aggregate(visibleHistory,"month");
-    return aggregate(visibleHistory,"year");
-  },[period,visibleHistory]);
-
-  const lastH  = visibleHistory[visibleHistory.length-1];
-  const firstH = visibleHistory[0];
-  const portfolioPct = firstH ? ((lastH.portfolio-firstH.portfolio)/firstH.portfolio)*100 : 0;
-  const shanghaiPct  = firstH ? ((lastH.shanghai-firstH.shanghai)/firstH.shanghai)*100 : 0;
-  const hs300Pct     = firstH ? ((lastH.hs300-firstH.hs300)/firstH.hs300)*100 : 0;
-  const colors = [t.pos, t.accent, t.warn, "#a78bfa", "#34d399"];
-
-  if(loading) return (
-    <div style={{padding:40,textAlign:"center",color:t.muted,fontSize:15}}>
-      加载持仓数据...
-    </div>
-  );
-
-  return (
-    <div style={{padding:"24px",display:"flex",flexDirection:"column",gap:20}}>
-
-      {/* KPI */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:12}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",
+        gap:0,borderTop:`1px solid ${BORDER}`}}>
         {[
-          {label:"总盈亏",     val:`¥${fmt(totalPnl)}`,            color:totalPnl>=0?t.pos:t.neg},
-          {label:"总收益率",   val:pct(totalPct),                   color:totalPct>=0?t.pos:t.neg},
-          {label:"跑赢上证",   val:pct(portfolioPct-shanghaiPct),   color:(portfolioPct-shanghaiPct)>=0?t.pos:t.neg},
-          {label:"跑赢沪深300",val:pct(portfolioPct-hs300Pct),     color:(portfolioPct-hs300Pct)>=0?t.pos:t.neg},
-          {label:"持仓数量",   val:`${positions.length}只`,         color:t.accent},
-        ].map(item=>(
-          <div key={item.label} style={{background:t.card,border:`1px solid ${t.border}`,
-            borderRadius:12,padding:"18px 20px"}}>
-            <div style={{fontSize:12,color:t.muted,letterSpacing:1,marginBottom:8}}>{item.label}</div>
-            <div style={{fontSize:22,fontWeight:800,fontFamily:"monospace",color:item.color}}>
-              {item.val}
+          {label:"持仓量",val:`${pos.qty.toLocaleString()}股`},
+          {label:"成本价",val:`¥${fmt(pos.cost,3)}`},
+          {label:"现价",  val:`¥${fmt(pos.price,3)}`,color:up?BLUE:RED},
+          {label:"市值",  val:`¥${fmt(mv,0)}`},
+        ].map((item,i)=>(
+          <div key={item.label} style={{padding:"10px 16px",
+            borderRight:i<3?`1px solid ${BORDER}`:"none",background:SURF}}>
+            <div style={{fontSize:10,color:MUTED,marginBottom:3,fontWeight:600,letterSpacing:0.5}}>
+              {item.label}
             </div>
+            <div style={{fontSize:13,fontFamily:"monospace",fontWeight:700,
+              color:item.color||TEXT}}>{item.val}</div>
           </div>
         ))}
       </div>
 
-      {/* 持仓列表 */}
-      <div style={{background:t.card,border:`1px solid ${t.border}`,
-        borderRadius:12,overflow:"hidden"}}>
-        <div style={{padding:"14px 20px",borderBottom:`1px solid ${t.border}`,
-          fontSize:13,color:t.muted,letterSpacing:2}}>
-          持仓明细 · 共{positions.length}只
-        </div>
-        {positions.length===0 ? (
-          <div style={{padding:32,textAlign:"center",color:t.muted,fontSize:14}}>
-            暂无持仓数据
+      <div style={{padding:"10px 20px",display:"flex",
+        alignItems:"center",gap:12,borderTop:`1px solid ${BORDER}`}}>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",justifyContent:"space-between",
+            marginBottom:4,fontSize:11,color:MUTED}}>
+            <span>仓位占比</span>
+            <span style={{fontFamily:"monospace",fontWeight:700,color}}>{fmt(w)}%</span>
           </div>
-        ) : positions.map((pos, i) => {
-          const pnl  = (pos.price - pos.cost) * pos.qty;
-          const pp   = ((pos.price - pos.cost) / pos.cost) * 100;
-          const mv   = pos.qty * pos.price;
-          const w    = totalVal > 0 ? (mv/totalVal)*100 : 0;
-          const days = Math.max(1, Math.round((NOW - new Date(pos.buyDate)) / 86400000));
-          return (
-            <div key={pos.code} style={{
-              padding:"16px 20px", borderBottom:`1px solid ${t.border}`,
-              display:"flex", alignItems:"center", gap:16,
-            }}>
-              <div style={{width:10,height:10,borderRadius:2,
-                background:colors[i%5],flexShrink:0}}/>
-              <div style={{width:110}}>
-                <div style={{fontSize:15,fontWeight:700,
-                  fontFamily:"monospace",color:t.accent}}>{pos.code}</div>
-                <div style={{fontSize:13,color:t.muted,marginTop:2}}>{pos.name}</div>
-              </div>
-              <div style={{flex:1,display:"grid",
-                gridTemplateColumns:"repeat(4,1fr)",gap:12}}>
-                {[
-                  {label:"总盈亏",  val:`${pnl>=0?"+":""}¥${fmt(pnl)}`,        color:pnl>=0?t.pos:t.neg},
-                  {label:"收益率",  val:pct(pp),                                color:pp>=0?t.pos:t.neg},
-                  {label:"日均盈亏",val:`${pnl/days>=0?"+":""}¥${fmt(pnl/days)}`,color:pnl>=0?t.pos:t.neg},
-                  {label:"仓位占比",val:`${fmt(w)}%`,                           color:t.muted},
-                ].map(item=>(
-                  <div key={item.label}>
-                    <div style={{fontSize:12,color:t.muted,marginBottom:4}}>{item.label}</div>
-                    <div style={{fontSize:15,fontFamily:"monospace",
-                      fontWeight:700,color:item.color}}>{item.val}</div>
-                  </div>
-                ))}
-              </div>
-              <div style={{display:"flex",gap:8,flexShrink:0}}>
-                <button onClick={()=>onETFDetail(pos)} style={{
-                  padding:"7px 16px",borderRadius:7,cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,fontWeight:600,
-                  background:t.accent,border:"none",color:"#fff",
-                }}>收益详情</button>
-                <button onClick={()=>onETFKline(pos)} style={{
-                  padding:"7px 16px",borderRadius:7,cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,fontWeight:600,
-                  background:"transparent",
-                  border:`1px solid ${t.border}`,color:t.sub,
-                }}>K线图</button>
-              </div>
-            </div>
-          );
-        })}
+          <div style={{height:5,background:BORDER,borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${w}%`,background:color,
+              borderRadius:3,transition:"width 0.6s"}}/>
+          </div>
+        </div>
+        <button onClick={()=>onPnl(pos)} style={{
+          padding:"7px 14px",borderRadius:8,cursor:"pointer",
+          fontFamily:"monospace",fontSize:12,fontWeight:700,
+          background:"transparent",border:`1.5px solid ${BORDER}`,color:"#64748b",
+          transition:"all 0.15s",flexShrink:0,
+        }}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor=BLUE;e.currentTarget.style.color=BLUE;}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor=BORDER;e.currentTarget.style.color="#64748b";}}
+        >盈亏分析</button>
+        <button onClick={()=>onKline(pos)} style={{
+          padding:"7px 18px",borderRadius:8,cursor:"pointer",
+          fontFamily:"monospace",fontSize:12,fontWeight:700,
+          background:BLUE,border:"none",color:"#fff",
+          boxShadow:"0 2px 8px rgba(29,78,216,0.25)",
+          transition:"all 0.15s",flexShrink:0,
+        }}
+          onMouseEnter={e=>e.currentTarget.style.background="#1e40af"}
+          onMouseLeave={e=>e.currentTarget.style.background=BLUE}
+        >K线图 →</button>
       </div>
+    </div>
+  );
+}
 
-      {/* 组合收益图表 */}
-      <div style={{background:t.card,border:`1px solid ${t.border}`,
-        borderRadius:12,padding:20}}>
-        <div style={{display:"flex",justifyContent:"space-between",
-          alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
-          <div style={{fontSize:13,color:t.muted,letterSpacing:2}}>
-            组合收益走势
-            <span style={{fontSize:11,color:t.muted+"66",marginLeft:8}}>
-              （历史走势为模拟，盈亏数据为真实）
+// ─── 主页面 ───────────────────────────────────────────────────────
+export default function AnalyticsPage({ onETFKline, onETFPnl }) {
+  const [positions, setPositions] = useState([]);
+  const [loading,   setLoading]   = useState(true);
+
+  useEffect(()=>{
+    getPositions()
+      .then(data=>{ setPositions(data.filter(p=>p.qty>0)); setLoading(false); })
+      .catch(()=>setLoading(false));
+  },[]);
+
+  const totalCost = positions.reduce((s,p)=>s+p.qty*p.cost, 0);
+  const totalVal  = positions.reduce((s,p)=>s+p.qty*p.price, 0);
+  const totalPnl  = totalVal-totalCost;
+  const totalPct  = totalCost>0?(totalPnl/totalCost)*100:0;
+  const up        = totalPnl>=0;
+
+  if(loading) return (
+    <div style={{padding:60,textAlign:"center",color:MUTED,fontSize:14}}>加载持仓数据...</div>
+  );
+
+  return (
+    <div style={{
+      padding:"24px 28px",display:"flex",flexDirection:"column",gap:20,
+      background:"#f0f4ff",minHeight:"100vh",
+      fontFamily:"'Segoe UI','PingFang SC',sans-serif",
+    }}>
+
+      {/* ── 总览横幅 ── */}
+      <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:14,
+        padding:"20px 28px",boxShadow:"0 2px 12px rgba(0,0,0,0.04)",
+        borderTop:`3px solid ${up?BLUE:RED}`,
+        display:"flex",alignItems:"center",justifyContent:"space-between",
+        flexWrap:"wrap",gap:20}}>
+        <div>
+          <div style={{fontSize:11,color:MUTED,letterSpacing:1.5,marginBottom:6,fontWeight:600}}>
+            投资组合总览
+          </div>
+          <div style={{display:"flex",alignItems:"baseline",gap:14}}>
+            <span style={{fontSize:32,fontWeight:900,fontFamily:"monospace",color:up?BLUE:RED}}>
+              {up?"+":""}¥{fmt(totalPnl)}
+            </span>
+            <span style={{fontSize:18,fontFamily:"monospace",fontWeight:700,
+              color:up?BLUE:RED,background:up?"#eff6ff":"#fff5f5",
+              padding:"3px 12px",borderRadius:8}}>
+              {pct(totalPct)}
             </span>
           </div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{display:"flex",gap:3}}>
-              {ranges.map((r,i)=>(
-                <button key={r.label} onClick={()=>setRangeIdx(i)} style={{
-                  padding:"4px 12px",borderRadius:6,border:"none",cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,
-                  background:rangeIdx===i?t.accent:"transparent",
-                  color:rangeIdx===i?"#fff":t.sub,
-                }}>{r.label}</button>
-              ))}
-            </div>
-            <div style={{width:1,height:16,background:t.border}}/>
-            <div style={{display:"flex",gap:3}}>
-              {[{id:"day",label:"日"},{id:"week",label:"周"},
-                {id:"month",label:"月"},{id:"year",label:"年"}].map(p=>(
-                <button key={p.id} onClick={()=>setPeriod(p.id)} style={{
-                  padding:"4px 12px",borderRadius:6,
-                  border:`1px solid ${period===p.id?t.accent:t.border}`,
-                  background:"transparent",cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,
-                  color:period===p.id?t.accent:t.sub,
-                }}>{p.label}</button>
-              ))}
-            </div>
-            <div style={{width:1,height:16,background:t.border}}/>
-            <button onClick={()=>setShowField(f=>f==="pnl"?"pct":"pnl")} style={{
-              padding:"4px 12px",borderRadius:6,border:`1px solid ${t.border}`,
-              background:"transparent",color:t.sub,cursor:"pointer",
-              fontFamily:"monospace",fontSize:13,
-            }}>{showField==="pnl"?"显示%":"显示¥"}</button>
-            <button onClick={()=>setChartMode(m=>m==="line"?"bar":"line")} style={{
-              padding:"4px 12px",borderRadius:6,border:`1px solid ${t.border}`,
-              background:"transparent",color:t.sub,cursor:"pointer",
-              fontFamily:"monospace",fontSize:13,
-            }}>{chartMode==="line"?"📊 柱状图":"📈 折线图"}</button>
+          <div style={{display:"flex",gap:24,marginTop:10}}>
+            {[
+              {label:"总成本",val:`¥${fmt(totalCost,0)}`},
+              {label:"总市值",val:`¥${fmt(totalVal,0)}`},
+              {label:"持仓数",val:`${positions.length}只`},
+            ].map(item=>(
+              <div key={item.label}>
+                <div style={{fontSize:10,color:MUTED,marginBottom:2,fontWeight:600}}>{item.label}</div>
+                <div style={{fontSize:14,fontFamily:"monospace",fontWeight:700,color:TEXT}}>
+                  {item.val}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-        <ReturnChart data={periodData} mode={chartMode}
-          showField={showField} t={t} height={320}/>
+
+        {/* 饼图 */}
+        {positions.length>0&&(
+          <div style={{width:260,height:180}}>
+            <PieChart positions={positions} height={180}/>
+          </div>
+        )}
       </div>
+
+      {/* ── 持仓明细 ── */}
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <div style={{width:3,height:16,background:BLUE,borderRadius:2}}/>
+        <span style={{fontSize:12,color:MUTED,letterSpacing:2,fontWeight:700}}>
+          持仓明细 · 共{positions.length}只
+        </span>
+      </div>
+
+      {positions.length===0 ? (
+        <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:14,
+          padding:60,textAlign:"center",color:MUTED,fontSize:14}}>暂无持仓数据</div>
+      ) : (
+        <div style={{display:"grid",
+          gridTemplateColumns:"repeat(auto-fill,minmax(460px,1fr))",gap:16}}>
+          {positions.map((pos,i)=>(
+            <PositionCard key={pos.code} pos={pos} idx={i}
+              totalVal={totalVal} onKline={onETFKline} onPnl={onETFPnl}/>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

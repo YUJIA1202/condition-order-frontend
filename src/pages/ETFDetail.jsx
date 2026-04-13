@@ -1,442 +1,365 @@
 // src/pages/ETFDetail.jsx
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect } from "react";
+import * as echarts from "echarts";
 
-const NOW = Date.now();
+const API    = "http://localhost:8000";
+const NOW    = Date.now();
+const BLUE   = "#1d4ed8";
+const RED    = "#dc2626";
+const AMBER  = "#d97706";
+const MUTED  = "#94a3b8";
+const BORDER = "#e2e8f0";
+const CARD   = "#ffffff";
+const SURF   = "#f8fafc";
+const TEXT   = "#0f172a";
+
 function fmt(n, d=2) { return Number(n).toFixed(d); }
 function pct(v, d=2) { return (v>=0?"+":"")+fmt(v,d)+"%"; }
-function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
 
-function genHistory(days=365) {
-  const result = [];
-  let portfolio=100, shanghai=100, hs300=100;
-  const totalCost = 5000*3.921 + 3000*1.842 + 2000*1.205;
-  for(let i=0; i<days; i++) {
-    portfolio *= (1+(Math.random()-0.47)*0.015);
-    shanghai  *= (1+(Math.random()-0.48)*0.010);
-    hs300     *= (1+(Math.random()-0.475)*0.011);
-    const d = new Date(Date.now()-(days-i)*86400000);
-    const dailyPct = (Math.random()-0.47)*1.5;
-    result.push({
-      date:  d.toISOString().slice(0,10),
-      month: `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`,
-      week:  `${d.getFullYear()}-W${String(Math.ceil(d.getDate()/7)).padStart(2,"0")}`,
-      year:  String(d.getFullYear()),
-      portfolio, shanghai, hs300,
-      dailyPnl: (dailyPct/100)*totalCost,
-      dailyPct,
-    });
-  }
-  return result;
+function fullCode(code) {
+  if(!code) return code;
+  if(code.includes(".")) return code;
+  if(code.startsWith("6")||code.startsWith("5")) return code+".SH";
+  return code+".SZ";
 }
 
-const HISTORY = genHistory(365);
+const RANGES = [{label:"1月",days:30},{label:"3月",days:90},{label:"6月",days:180},{label:"1年",days:365}];
 
 function aggregate(history, groupKey) {
   const map = {};
-  history.forEach(d => {
-    const key = d[groupKey];
-    if(!map[key]) map[key] = {
-      date:key, pnl:0, pct:0,
-      portfolioStart:d.portfolio, portfolioEnd:d.portfolio,
-      shanghaiStart:d.shanghai,   shanghaiEnd:d.shanghai,
-      hs300Start:d.hs300,         hs300End:d.hs300,
-    };
-    map[key].pnl += d.dailyPnl;
-    map[key].pct += d.dailyPct;
-    map[key].portfolioEnd = d.portfolio;
-    map[key].shanghaiEnd  = d.shanghai;
-    map[key].hs300End     = d.hs300;
+  history.forEach(d=>{
+    const key = d[groupKey] || d.date?.slice(0,7);
+    if(!map[key]) map[key]={date:key,pnl:0,dailyPnl:0,pct:0,dailyPct:0};
+    map[key].pnl      += d.dailyPnl||0;
+    map[key].dailyPnl += d.dailyPnl||0;
+    map[key].pct      += d.dailyPct||0;
+    map[key].dailyPct += d.dailyPct||0;
   });
   return Object.values(map);
 }
 
-// ─── 收益图表 ─────────────────────────────────────────────────────
-function ReturnChart({ data, mode, showField, t, height=300 }) {
-  const canvasRef = useRef();
-  const [tooltip, setTooltip] = useState(null);
+// ─── ECharts 收益图 ───────────────────────────────────────────────
+function ReturnChart({ data, mode, showField, height=300 }) {
+  const ref = useRef();
+  useEffect(()=>{
+    if(!data.length||!ref.current) return;
+    const chart = echarts.init(ref.current);
+    const dates = data.map(d=>d.date);
+    const vals  = data.map(d=>+(
+      showField==="pnl"
+        ? (d.pnl??d.dailyPnl??0)
+        : (d.pct??d.dailyPct??0)
+    ).toFixed(2));
 
-  const draw = useCallback((hoverIdx=-1) => {
-    const canvas=canvasRef.current; if(!canvas||!data.length) return;
-    const dpr=window.devicePixelRatio||1;
-    const W=canvas.offsetWidth, H=canvas.offsetHeight;
-    canvas.width=W*dpr; canvas.height=H*dpr;
-    const ctx=canvas.getContext("2d"); ctx.scale(dpr,dpr);
-    ctx.fillStyle=t.card; ctx.fillRect(0,0,W,H);
-    const pad={l:68,r:16,t:16,b:32};
-    const cW=W-pad.l-pad.r, cH=H-pad.t-pad.b;
-    const vals=data.map(d=>showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct));
-    const maxV=Math.max(...vals.map(Math.abs))*1.2||1;
-    const minV=-maxV, range=maxV-minV;
-    const toY=v=>pad.t+((maxV-v)/range)*cH;
-    const toX=i=>pad.l+(i/(data.length-1||1))*cW;
+    const series = mode==="bar"
+      ? { data:vals,type:"bar",
+          itemStyle:{color:p=>p.value>=0?BLUE:RED},
+          markLine:{silent:true,lineStyle:{color:BORDER,type:"dashed"},
+            data:[{yAxis:0}],label:{show:false}} }
+      : { data:vals,type:"line",smooth:true,symbol:"none",
+          lineStyle:{color:BLUE,width:2},
+          areaStyle:{color:{type:"linear",x:0,y:0,x2:0,y2:1,
+            colorStops:[{offset:0,color:BLUE+"33"},{offset:1,color:BLUE+"05"}]}},
+          itemStyle:{color:BLUE},
+          markLine:{silent:true,lineStyle:{color:BORDER,type:"dashed"},
+            data:[{yAxis:0}],label:{show:false}} };
 
-    ctx.strokeStyle=t.border; ctx.lineWidth=0.5;
-    for(let g=0;g<=4;g++){
-      const y=pad.t+(g/4)*cH;
-      ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cW,y); ctx.stroke();
-      const lbl=showField==="pnl"?`¥${fmt(maxV-(g/4)*range,0)}`:pct(maxV-(g/4)*range,1);
-      ctx.fillStyle=t.muted; ctx.font="14px monospace"; ctx.textAlign="right";
-      ctx.fillText(lbl,pad.l-6,y+3);
-    }
-    const zy=toY(0);
-    ctx.save(); ctx.strokeStyle=t.muted+"88"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-    ctx.beginPath(); ctx.moveTo(pad.l,zy); ctx.lineTo(pad.l+cW,zy); ctx.stroke();
-    ctx.restore();
-    const step=Math.ceil(data.length/8);
-    data.forEach((d,i)=>{
-      if(i%step===0){
-        ctx.fillStyle=t.muted; ctx.font="14px monospace"; ctx.textAlign="center";
-        ctx.fillText(d.date.slice(5),toX(i),H-6);
-      }
+    chart.setOption({
+      backgroundColor:CARD,
+      tooltip:{
+        trigger:"axis",backgroundColor:CARD,borderColor:BORDER,
+        textStyle:{color:TEXT,fontSize:12,fontFamily:"monospace"},
+        formatter(params){
+          const p=params[0];
+          const sign=p.value>=0?"+":"";
+          const val=showField==="pnl"?`${sign}¥${fmt(p.value)}`:`${sign}${fmt(p.value)}%`;
+          return `<div style="color:${MUTED};font-size:11px;margin-bottom:4px">${p.axisValue}</div>
+                  <div style="color:${p.value>=0?BLUE:RED};font-weight:700">${val}</div>`;
+        },
+      },
+      grid:{left:72,right:16,top:12,bottom:32},
+      xAxis:{type:"category",data:dates,
+        axisLine:{lineStyle:{color:BORDER}},
+        axisLabel:{color:MUTED,fontSize:11,fontFamily:"monospace",formatter:v=>v.slice(5)},
+        splitLine:{show:false}},
+      yAxis:{type:"value",
+        axisLabel:{color:MUTED,fontSize:11,fontFamily:"monospace",
+          formatter:v=>showField==="pnl"?`¥${fmt(v,0)}`:`${v>=0?"+":""}${fmt(v,1)}%`},
+        splitLine:{lineStyle:{color:BORDER,type:"dashed"}}},
+      series:[series],
+    });
+    const ro=new ResizeObserver(()=>chart.resize());
+    ro.observe(ref.current);
+    return ()=>{ chart.dispose(); ro.disconnect(); };
+  },[data,mode,showField]);
+  return <div ref={ref} style={{width:"100%",height}}/>;
+}
+
+// ─── ECharts 对比图 ───────────────────────────────────────────────
+function CompareChart({ pnlHistory, indexHistory, height=280 }) {
+  const ref = useRef();
+  useEffect(()=>{
+    if(!pnlHistory.length||!ref.current) return;
+    const chart = echarts.init(ref.current);
+
+    const indexMap = {};
+    indexHistory.forEach(d=>{ indexMap[d.date]=d; });
+
+    // 累计盈亏转百分比
+    let cumPnl = 0;
+    const portfolioPoints = pnlHistory.map(d=>{
+      cumPnl += d.dailyPnl||0;
+      return {date:d.date, cumPnl};
+    });
+    const maxPnl = Math.max(...portfolioPoints.map(p=>Math.abs(p.cumPnl)));
+    const base   = maxPnl>0 ? maxPnl*10 : 10000;
+
+    const shFirst = indexHistory[0]?.shanghai;
+    const hsFirst = indexHistory[0]?.hs300;
+    const dates   = pnlHistory.map(d=>d.date);
+    const portfolioPct = portfolioPoints.map(p=>+((p.cumPnl/base)*100).toFixed(3));
+    const shanghaiPct  = dates.map(d=>{
+      const idx=indexMap[d];
+      if(!idx||!shFirst) return null;
+      return +((idx.shanghai-shFirst)/shFirst*100).toFixed(3);
+    });
+    const hs300Pct = dates.map(d=>{
+      const idx=indexMap[d];
+      if(!idx||!hsFirst) return null;
+      return +((idx.hs300-hsFirst)/hsFirst*100).toFixed(3);
     });
 
-    if(mode==="bar"){
-      const bw=Math.max(2,cW/data.length*0.7);
-      data.forEach((d,i)=>{
-        const v=showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct);
-        const color=v>=0?t.pos:t.neg;
-        ctx.fillStyle=i===hoverIdx?color:color+"bb";
-        ctx.fillRect(toX(i)-bw/2,Math.min(zy,toY(v)),bw,Math.abs(toY(v)-zy)||1);
-      });
-    } else {
-      const pts=data.map((d,i)=>({
-        x:toX(i),
-        y:toY(showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct)),
-        v:showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct),
-      }));
-      const lv=pts[pts.length-1]?.v??0;
-      const fc=lv>=0?t.pos:t.neg;
-      const grd=ctx.createLinearGradient(0,pad.t,0,pad.t+cH);
-      grd.addColorStop(0,fc+"44"); grd.addColorStop(1,fc+"04");
-      ctx.beginPath();
-      pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-      ctx.lineTo(pts[pts.length-1].x,zy); ctx.lineTo(pts[0].x,zy); ctx.closePath();
-      ctx.fillStyle=grd; ctx.fill();
-      ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-      ctx.strokeStyle=fc; ctx.lineWidth=2; ctx.stroke();
-      if(hoverIdx>=0&&hoverIdx<pts.length){
-        const p=pts[hoverIdx];
-        ctx.beginPath(); ctx.arc(p.x,p.y,5,0,Math.PI*2);
-        ctx.fillStyle=fc; ctx.fill();
-        ctx.strokeStyle=t.card; ctx.lineWidth=2; ctx.stroke();
-      }
-    }
-    if(hoverIdx>=0){
-      const x=toX(hoverIdx);
-      ctx.save(); ctx.strokeStyle=t.muted+"66"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.moveTo(x,pad.t); ctx.lineTo(x,pad.t+cH); ctx.stroke();
-      ctx.restore();
-    }
-  },[data,mode,showField,t]);
+    chart.setOption({
+      backgroundColor:CARD,
+      tooltip:{
+        trigger:"axis",backgroundColor:CARD,borderColor:BORDER,
+        textStyle:{color:TEXT,fontSize:12,fontFamily:"monospace"},
+        formatter(params){
+          const d=params[0]?.axisValue;
+          const pv=params[0]?.value, sv=params[1]?.value, hv=params[2]?.value;
+          if(pv==null) return "";
+          const diff=sv!=null?pv-sv:null;
+          return `<div style="color:${MUTED};font-size:11px;margin-bottom:5px">${d}</div>
+            <div style="display:flex;justify-content:space-between;gap:18px;margin-bottom:3px">
+              <span style="color:${BLUE}">我的ETF</span>
+              <span style="color:${BLUE};font-weight:700">${pv>=0?"+":""}${fmt(pv)}%</span>
+            </div>
+            ${sv!=null?`<div style="display:flex;justify-content:space-between;gap:18px;margin-bottom:3px">
+              <span style="color:${MUTED}">上证指数</span>
+              <span style="font-weight:700">${sv>=0?"+":""}${fmt(sv)}%</span>
+            </div>`:""}
+            ${hv!=null?`<div style="display:flex;justify-content:space-between;gap:18px;margin-bottom:5px">
+              <span style="color:${AMBER}">沪深300</span>
+              <span style="color:${AMBER};font-weight:700">${hv>=0?"+":""}${fmt(hv)}%</span>
+            </div>`:""}
+            ${diff!=null?`<div style="border-top:1px solid ${BORDER};padding-top:5px;display:flex;justify-content:space-between;gap:18px">
+              <span style="color:${MUTED};font-size:11px">跑赢上证</span>
+              <span style="font-weight:700;color:${diff>=0?BLUE:RED}">${diff>=0?"+":""}${fmt(diff)}%</span>
+            </div>`:""}`;
+        },
+      },
+      legend:{data:["我的ETF","上证指数","沪深300"],textStyle:{color:"#64748b",fontSize:12},top:4},
+      grid:{left:56,right:16,top:36,bottom:32},
+      xAxis:{type:"category",data:dates,
+        axisLine:{lineStyle:{color:BORDER}},
+        axisLabel:{color:MUTED,fontSize:11,fontFamily:"monospace",formatter:v=>v.slice(5)},
+        splitLine:{show:false}},
+      yAxis:{type:"value",
+        axisLabel:{color:MUTED,fontSize:11,fontFamily:"monospace",
+          formatter:v=>(v>=0?"+":"")+v.toFixed(1)+"%"},
+        splitLine:{lineStyle:{color:BORDER,type:"dashed"}}},
+      series:[
+        {name:"我的ETF",data:portfolioPct,type:"line",smooth:true,symbol:"none",
+          lineStyle:{color:BLUE,width:2.5},
+          areaStyle:{color:{type:"linear",x:0,y:0,x2:0,y2:1,
+            colorStops:[{offset:0,color:BLUE+"22"},{offset:1,color:BLUE+"05"}]}},
+          itemStyle:{color:BLUE}},
+        {name:"上证指数",data:shanghaiPct,type:"line",smooth:true,symbol:"none",
+          connectNulls:true,
+          lineStyle:{color:"#64748b",width:1.5,type:"dashed"},itemStyle:{color:"#64748b"}},
+        {name:"沪深300",data:hs300Pct,type:"line",smooth:true,symbol:"none",
+          connectNulls:true,
+          lineStyle:{color:AMBER,width:1.5,type:"dashed"},itemStyle:{color:AMBER}},
+      ],
+    });
+    const ro=new ResizeObserver(()=>chart.resize());
+    ro.observe(ref.current);
+    return ()=>{ chart.dispose(); ro.disconnect(); };
+  },[pnlHistory,indexHistory]);
+  return <div ref={ref} style={{width:"100%",height}}/>;
+}
 
-  useEffect(()=>{draw();},[draw]);
-  useEffect(()=>{
-    const ro=new ResizeObserver(()=>draw());
-    if(canvasRef.current) ro.observe(canvasRef.current);
-    return ()=>ro.disconnect();
-  },[draw]);
-
-  const onMouseMove=useCallback(e=>{
-    const canvas=canvasRef.current; if(!canvas) return;
-    const rect=canvas.getBoundingClientRect();
-    const x=e.clientX-rect.left-68;
-    const idx=clamp(Math.round((x/(canvas.offsetWidth-84))*(data.length-1)),0,data.length-1);
-    draw(idx);
-    const d=data[idx];
-    const v=showField==="pnl"?(d.pnl||d.dailyPnl):(d.pct||d.dailyPct);
-    setTooltip({date:d.date,v,x:e.clientX-rect.left,y:e.clientY-rect.top});
-  },[draw,data,showField]);
-
-  const onMouseLeave=useCallback(()=>{draw(-1);setTooltip(null);},[draw]);
-
+// ─── 按钮组 ───────────────────────────────────────────────────────
+function BtnGroup({ items, active, onSelect, keyField="id", labelField="label" }) {
   return (
-    <div style={{position:"relative",width:"100%",height}}>
-      <canvas ref={canvasRef}
-        style={{display:"block",width:"100%",height:"100%",cursor:"crosshair"}}
-        onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}/>
-      {tooltip&&(
-        <div style={{position:"absolute",
-          left:clamp(tooltip.x+14,0,260),top:clamp(tooltip.y-50,0,height-70),
-          background:t.surface,border:`1px solid ${t.border}`,borderRadius:8,
-          padding:"8px 12px",fontSize:13,fontFamily:"monospace",
-          pointerEvents:"none",zIndex:10}}>
-          <div style={{color:t.muted,marginBottom:3}}>{tooltip.date}</div>
-          <div style={{color:tooltip.v>=0?t.pos:t.neg,fontWeight:700}}>
-            {showField==="pnl"?`${tooltip.v>=0?"+":""}¥${fmt(tooltip.v)}`:pct(tooltip.v)}
-          </div>
-        </div>
-      )}
+    <div style={{display:"flex",gap:3}}>
+      {items.map(item=>{
+        const k=item[keyField]??item, l=item[labelField]??item, on=active===k;
+        return (
+          <button key={k} onClick={()=>onSelect(k)} style={{
+            padding:"4px 12px",borderRadius:6,cursor:"pointer",
+            fontSize:12,fontWeight:600,fontFamily:"monospace",
+            background:on?BLUE:"transparent",
+            border:`1px solid ${on?BLUE:BORDER}`,
+            color:on?"#fff":"#64748b",transition:"all 0.15s",
+          }}>{l}</button>
+        );
+      })}
     </div>
   );
 }
 
-// ─── 对比图 ───────────────────────────────────────────────────────
-function CompareChart({ history, t, height=280 }) {
-  const canvasRef=useRef();
-  const [tooltip,setTooltip]=useState(null);
-  const hoverRef=useRef(-1);
-
-  const draw=useCallback((hoverIdx=-1)=>{
-    const canvas=canvasRef.current; if(!canvas||!history.length) return;
-    const dpr=window.devicePixelRatio||1;
-    const W=canvas.offsetWidth, H=canvas.offsetHeight;
-    canvas.width=W*dpr; canvas.height=H*dpr;
-    const ctx=canvas.getContext("2d"); ctx.scale(dpr,dpr);
-    ctx.fillStyle=t.card; ctx.fillRect(0,0,W,H);
-    const pad={l:56,r:16,t:12,b:32};
-    const cW=W-pad.l-pad.r, cH=H-pad.t-pad.b;
-    const p0=history[0];
-    const series=[
-      {key:"portfolio",color:t.accent,w:2,dash:[]},
-      {key:"shanghai", color:t.text,  w:1.5,dash:[5,4]},
-      {key:"hs300",    color:t.warn,  w:1.5,dash:[5,4]},
-    ];
-    const allP=history.flatMap(d=>series.map(s=>((d[s.key]-p0[s.key])/p0[s.key])*100));
-    const minV=Math.min(...allP), maxV=Math.max(...allP), range=maxV-minV||1;
-    const toY=v=>pad.t+((maxV-v)/range)*cH;
-    const toX=i=>pad.l+(i/(history.length-1||1))*cW;
-
-    ctx.strokeStyle=t.border; ctx.lineWidth=0.5;
-    for(let g=0;g<=4;g++){
-      const y=pad.t+(g/4)*cH;
-      ctx.beginPath(); ctx.moveTo(pad.l,y); ctx.lineTo(pad.l+cW,y); ctx.stroke();
-      ctx.fillStyle=t.muted; ctx.font="14px monospace"; ctx.textAlign="right";
-      ctx.fillText(pct(maxV-(g/4)*range,1),pad.l-4,y+3);
-    }
-    if(minV<0&&maxV>0){
-      const zy=toY(0);
-      ctx.save(); ctx.strokeStyle=t.muted+"88"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.moveTo(pad.l,zy); ctx.lineTo(pad.l+cW,zy); ctx.stroke();
-      ctx.restore();
-    }
-    const step=Math.ceil(history.length/7);
-    history.forEach((d,i)=>{
-      if(i%step===0){
-        ctx.fillStyle=t.muted; ctx.font="14px monospace"; ctx.textAlign="center";
-        ctx.fillText(d.date.slice(5),toX(i),H-6);
-      }
-    });
-    series.forEach(s=>{
-      const pts=history.map((d,i)=>({x:toX(i),y:toY(((d[s.key]-p0[s.key])/p0[s.key])*100)}));
-      ctx.beginPath(); pts.forEach((p,i)=>i===0?ctx.moveTo(p.x,p.y):ctx.lineTo(p.x,p.y));
-      ctx.strokeStyle=s.color; ctx.lineWidth=s.w;
-      ctx.setLineDash(s.dash); ctx.stroke(); ctx.setLineDash([]);
-    });
-    if(hoverIdx>=0&&hoverIdx<history.length){
-      const x=toX(hoverIdx);
-      ctx.save(); ctx.strokeStyle=t.muted+"66"; ctx.lineWidth=1; ctx.setLineDash([4,4]);
-      ctx.beginPath(); ctx.moveTo(x,pad.t); ctx.lineTo(x,pad.t+cH); ctx.stroke();
-      ctx.restore();
-      series.forEach(s=>{
-        const y=toY(((history[hoverIdx][s.key]-p0[s.key])/p0[s.key])*100);
-        ctx.beginPath(); ctx.arc(x,y,4,0,Math.PI*2);
-        ctx.fillStyle=s.color; ctx.fill();
-        ctx.strokeStyle=t.card; ctx.lineWidth=1.5; ctx.stroke();
-      });
-    }
-  },[history,t]);
-
-  useEffect(()=>{draw();},[draw]);
-  useEffect(()=>{
-    const ro=new ResizeObserver(()=>draw(hoverRef.current));
-    if(canvasRef.current) ro.observe(canvasRef.current);
-    return ()=>ro.disconnect();
-  },[draw]);
-
-  const onMouseMove=useCallback(e=>{
-    const canvas=canvasRef.current; if(!canvas) return;
-    const rect=canvas.getBoundingClientRect();
-    const x=e.clientX-rect.left-56;
-    const idx=clamp(Math.round((x/(canvas.offsetWidth-72))*(history.length-1)),0,history.length-1);
-    hoverRef.current=idx; draw(idx);
-    const d=history[idx], p0=history[0];
-    setTooltip({
-      date:d.date,
-      portfolio:((d.portfolio-p0.portfolio)/p0.portfolio)*100,
-      shanghai: ((d.shanghai-p0.shanghai)/p0.shanghai)*100,
-      hs300:    ((d.hs300-p0.hs300)/p0.hs300)*100,
-      x:e.clientX-rect.left, y:e.clientY-rect.top,
-    });
-  },[draw,history]);
-
-  const onMouseLeave=useCallback(()=>{hoverRef.current=-1;draw(-1);setTooltip(null);},[draw]);
-
+// ─── Section 标题 ─────────────────────────────────────────────────
+function SectionTitle({ text }) {
   return (
-    <div style={{position:"relative",width:"100%",height}}>
-      <canvas ref={canvasRef}
-        style={{display:"block",width:"100%",height:"100%",cursor:"crosshair"}}
-        onMouseMove={onMouseMove} onMouseLeave={onMouseLeave}/>
-      {tooltip&&(
-        <div style={{position:"absolute",
-          left:clamp(tooltip.x+14,0,300),top:clamp(tooltip.y-80,0,height-120),
-          background:t.surface,border:`1px solid ${t.border}`,borderRadius:10,
-          padding:"12px 16px",fontSize:13,fontFamily:"monospace",
-          pointerEvents:"none",zIndex:10}}>
-          <div style={{color:t.muted,marginBottom:6,fontSize:12}}>{tooltip.date}</div>
-          <div style={{display:"flex",justifyContent:"space-between",gap:20,marginBottom:4}}>
-            <span style={{color:t.accent}}>我的ETF</span>
-            <span style={{color:t.accent,fontWeight:700}}>{pct(tooltip.portfolio)}</span>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",gap:20,marginBottom:4}}>
-            <span style={{color:t.sub}}>上证指数</span>
-            <span style={{color:t.text,fontWeight:700}}>{pct(tooltip.shanghai)}</span>
-          </div>
-          <div style={{display:"flex",justifyContent:"space-between",gap:20,marginBottom:4}}>
-            <span style={{color:t.warn}}>沪深300</span>
-            <span style={{color:t.warn,fontWeight:700}}>{pct(tooltip.hs300)}</span>
-          </div>
-          <div style={{borderTop:`1px solid ${t.border}`,paddingTop:6,marginTop:4,
-            display:"flex",justifyContent:"space-between",gap:20}}>
-            <span style={{color:t.muted,fontSize:12}}>跑赢上证</span>
-            <span style={{fontWeight:700,fontSize:13,
-              color:(tooltip.portfolio-tooltip.shanghai)>=0?t.pos:t.neg}}>
-              {pct(tooltip.portfolio-tooltip.shanghai)}
-            </span>
-          </div>
-        </div>
-      )}
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+      <div style={{width:3,height:14,background:BLUE,borderRadius:2}}/>
+      <span style={{fontSize:12,color:MUTED,letterSpacing:2,fontWeight:700}}>{text}</span>
     </div>
   );
 }
 
 // ─── 主页面 ───────────────────────────────────────────────────────
-export default function ETFDetail({ etf, t }) {
-  const [chartMode,  setChartMode]  = useState("line");
-  const [showField,  setShowField]  = useState("pct");
-  const [period,     setPeriod]     = useState("day");
-  const [rangeIdx,   setRangeIdx]   = useState(1);
+export default function ETFDetail({ etf }) {
+  const [chartMode,   setChartMode]   = useState("line");
+  const [showField,   setShowField]   = useState("pct");
+  const [period,      setPeriod]      = useState("day");
+  const [rangeIdx,    setRangeIdx]    = useState(1);
+  const [pnlData,     setPnlData]     = useState([]);
+  const [indexData,   setIndexData]   = useState([]);
+  const [loading,     setLoading]     = useState(true);
+useEffect(()=>{
+  if(!etf) return;
+  Promise.resolve().then(()=>setLoading(true));
+  Promise.all([
+      fetch(`${API}/history-pnl?days=365`).then(r=>r.json()),
+      fetch(`${API}/history-index?days=365`).then(r=>r.json()),
+    ]).then(([pnl, idx])=>{
+      setPnlData(pnl);
+      setIndexData(idx);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  },[etf]);
 
-  const ranges = [
-    {label:"1月",days:30},{label:"3月",days:90},
-    {label:"6月",days:180},{label:"1年",days:365},
-  ];
+  const visiblePnl = useMemo(()=>
+    pnlData.slice(-RANGES[rangeIdx].days)
+  ,[pnlData, rangeIdx]);
 
-  const visibleHistory = useMemo(()=>HISTORY.slice(-ranges[rangeIdx].days),[rangeIdx]);
+  const visibleIndex = useMemo(()=>{
+    if(!visiblePnl.length) return [];
+    const startDate = visiblePnl[0].date;
+    return indexData.filter(d=>d.date>=startDate);
+  },[indexData, visiblePnl]);
 
   const periodData = useMemo(()=>{
-    if(period==="day")   return visibleHistory;
-    if(period==="week")  return aggregate(visibleHistory,"week");
-    if(period==="month") return aggregate(visibleHistory,"month");
-    return aggregate(HISTORY,"year");
-  },[period,visibleHistory]);
+    if(period==="day")   return visiblePnl;
+    if(period==="week")  return aggregate(visiblePnl,"week");
+    if(period==="month") return aggregate(visiblePnl,"month");
+    return aggregate(pnlData,"year");
+  },[period, visiblePnl, pnlData]);
 
   if(!etf) return (
-    <div style={{padding:40,textAlign:"center",color:t.muted,fontSize:15}}>
-      未选择ETF
-    </div>
+    <div style={{padding:60,textAlign:"center",color:MUTED,fontSize:14}}>未选择ETF</div>
   );
 
   const totalPnl = (etf.price-etf.cost)*etf.qty;
   const totalPct = ((etf.price-etf.cost)/etf.cost)*100;
-  const days = Math.max(1, Math.round((NOW - new Date(etf.buyDate)) / 86400000));
-  const dayPnl   = totalPnl/days;
-  const weekPnl  = totalPnl/(days/7);
-  const monthPnl = totalPnl/(days/30);
+  const days     = Math.max(1,Math.round((NOW-new Date(etf.buyDate||"2024-01-01"))/86400000));
+  const up       = totalPnl>=0;
 
   return (
-    <div style={{padding:"24px",display:"flex",flexDirection:"column",gap:20}}>
+    <div style={{
+      padding:"24px 28px",display:"flex",flexDirection:"column",gap:18,
+      background:"#f0f4ff",minHeight:"100vh",
+      fontFamily:"'Segoe UI','PingFang SC',sans-serif",
+    }}>
 
       {/* Header */}
-      <div style={{background:t.card,border:`1px solid ${t.border}`,
-        borderRadius:12,padding:"20px 24px"}}>
-        <div style={{fontSize:13,color:t.muted,marginBottom:6,letterSpacing:1}}>
-          {etf.code} · {etf.name}
+      <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:16,
+        padding:"20px 24px",boxShadow:"0 2px 12px rgba(0,0,0,0.04)",
+        borderTop:`3px solid ${up?BLUE:RED}`}}>
+        <div style={{fontSize:12,color:MUTED,marginBottom:8,letterSpacing:1,fontWeight:600}}>
+          {fullCode(etf.code)} · {etf.name}
         </div>
-        <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:16}}>
-          <span style={{fontSize:36,fontWeight:800,fontFamily:"monospace",
-            color:totalPnl>=0?t.pos:t.neg}}>
-            {totalPnl>=0?"+":""}¥{fmt(totalPnl)}
+        <div style={{display:"flex",alignItems:"baseline",gap:16,marginBottom:18}}>
+          <span style={{fontSize:36,fontWeight:900,fontFamily:"monospace",color:up?BLUE:RED}}>
+            {up?"+":""}¥{fmt(totalPnl)}
           </span>
-          <span style={{fontSize:20,fontFamily:"monospace",
-            color:totalPnl>=0?t.pos:t.neg}}>{pct(totalPct)}</span>
+          <span style={{
+            fontSize:18,fontFamily:"monospace",fontWeight:700,color:up?BLUE:RED,
+            background:up?"#eff6ff":"#fff5f5",padding:"3px 12px",borderRadius:8,
+            border:`1px solid ${up?"#bfdbfe":"#fecaca"}`,
+          }}>{pct(totalPct)}</span>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:16}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:14}}>
           {[
             {label:"持仓量",  val:`${etf.qty.toLocaleString()}股`},
             {label:"成本价",  val:`¥${fmt(etf.cost,3)}`},
             {label:"现价",    val:`¥${fmt(etf.price,3)}`},
             {label:"持有天数",val:`${days}天`},
-            {label:"日均盈亏",val:`${dayPnl>=0?"+":""}¥${fmt(dayPnl)}`},
-            {label:"周均盈亏",val:`${weekPnl>=0?"+":""}¥${fmt(weekPnl)}`},
-            {label:"月均盈亏",val:`${monthPnl>=0?"+":""}¥${fmt(monthPnl)}`},
+            {label:"日均盈亏",val:`${totalPnl/days>=0?"+":""}¥${fmt(totalPnl/days)}`},
+            {label:"周均盈亏",val:`${totalPnl/(days/7)>=0?"+":""}¥${fmt(totalPnl/(days/7))}`},
+            {label:"月均盈亏",val:`${totalPnl/(days/30)>=0?"+":""}¥${fmt(totalPnl/(days/30))}`},
           ].map(item=>(
-            <div key={item.label}>
-              <div style={{fontSize:11,color:t.muted,marginBottom:4}}>{item.label}</div>
-              <div style={{fontSize:15,fontFamily:"monospace",fontWeight:700,color:t.text}}>
-                {item.val}
-              </div>
+            <div key={item.label} style={{
+              background:SURF,borderRadius:10,padding:"10px 12px",border:`1px solid ${BORDER}`,
+            }}>
+              <div style={{fontSize:10,color:MUTED,marginBottom:4,fontWeight:600}}>{item.label}</div>
+              <div style={{fontSize:14,fontFamily:"monospace",fontWeight:800,color:TEXT}}>{item.val}</div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* 收益图表 */}
-      <div style={{background:t.card,border:`1px solid ${t.border}`,
-        borderRadius:12,padding:"20px 24px"}}>
+      {/* 收益走势 */}
+      <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:16,
+        padding:"20px 24px",boxShadow:"0 2px 12px rgba(0,0,0,0.04)"}}>
+        <SectionTitle text="收益走势"/>
         <div style={{display:"flex",justifyContent:"space-between",
-          alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
-          <div style={{fontSize:13,color:t.muted,letterSpacing:2}}>收益走势</div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-            <div style={{display:"flex",gap:3}}>
-              {ranges.map((r,i)=>(
-                <button key={r.label} onClick={()=>setRangeIdx(i)} style={{
-                  padding:"5px 14px",borderRadius:6,border:"none",cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,
-                  background:rangeIdx===i?t.accent:"transparent",
-                  color:rangeIdx===i?"#fff":t.sub,
-                }}>{r.label}</button>
-              ))}
-            </div>
-            <div style={{width:1,height:16,background:t.border}}/>
-            <div style={{display:"flex",gap:3}}>
-              {[{id:"day",label:"日"},{id:"week",label:"周"},
-                {id:"month",label:"月"},{id:"year",label:"年"}].map(p=>(
-                <button key={p.id} onClick={()=>setPeriod(p.id)} style={{
-                  padding:"5px 14px",borderRadius:6,
-                  border:`1px solid ${period===p.id?t.accent:t.border}`,
-                  background:"transparent",cursor:"pointer",
-                  fontFamily:"monospace",fontSize:13,
-                  color:period===p.id?t.accent:t.sub,
-                }}>{p.label}</button>
-              ))}
-            </div>
-            <div style={{width:1,height:16,background:t.border}}/>
+          alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:10}}>
+          <span style={{fontSize:11,color:MUTED+"99"}}>
+            {loading?"加载中...":"基于真实K线计算"}
+          </span>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+            <BtnGroup items={RANGES.map((r,i)=>({id:i,label:r.label}))}
+              active={rangeIdx} onSelect={setRangeIdx}/>
+            <div style={{width:1,height:16,background:BORDER}}/>
+            <BtnGroup items={[{id:"day",label:"日"},{id:"week",label:"周"},
+              {id:"month",label:"月"},{id:"year",label:"年"}]}
+              active={period} onSelect={setPeriod}/>
+            <div style={{width:1,height:16,background:BORDER}}/>
             <button onClick={()=>setShowField(f=>f==="pnl"?"pct":"pnl")} style={{
-              padding:"5px 14px",borderRadius:6,border:`1px solid ${t.border}`,
-              background:"transparent",color:t.sub,cursor:"pointer",
-              fontFamily:"monospace",fontSize:13,
+              padding:"4px 12px",borderRadius:6,border:`1px solid ${BORDER}`,
+              background:"transparent",color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:600,
             }}>{showField==="pnl"?"显示%":"显示¥"}</button>
             <button onClick={()=>setChartMode(m=>m==="line"?"bar":"line")} style={{
-              padding:"5px 14px",borderRadius:6,border:`1px solid ${t.border}`,
-              background:"transparent",color:t.sub,cursor:"pointer",
-              fontFamily:"monospace",fontSize:13,
-            }}>{chartMode==="line"?"📊 柱状图":"📈 折线图"}</button>
+              padding:"4px 12px",borderRadius:6,border:`1px solid ${BORDER}`,
+              background:"transparent",color:"#64748b",cursor:"pointer",fontSize:12,fontWeight:600,
+            }}>{chartMode==="line"?"📊 柱状":"📈 折线"}</button>
           </div>
         </div>
-        <ReturnChart data={periodData} mode={chartMode} showField={showField} t={t} height={300}/>
+        {loading ? (
+          <div style={{height:300,display:"flex",alignItems:"center",
+            justifyContent:"center",color:MUTED,fontSize:13}}>加载数据...</div>
+        ) : periodData.length===0 ? (
+          <div style={{height:300,display:"flex",alignItems:"center",
+            justifyContent:"center",color:MUTED,fontSize:13}}>暂无数据</div>
+        ) : (
+          <ReturnChart key={`${chartMode}-${showField}-${period}-${rangeIdx}`}
+            data={periodData} mode={chartMode} showField={showField} height={300}/>
+        )}
       </div>
 
       {/* 同期对比 */}
-      <div style={{background:t.card,border:`1px solid ${t.border}`,
-        borderRadius:12,padding:"20px 24px"}}>
-        <div style={{display:"flex",justifyContent:"space-between",
-          alignItems:"center",marginBottom:16}}>
-          <div style={{fontSize:13,color:t.muted,letterSpacing:2}}>同期与指数对比</div>
-          <div style={{display:"flex",gap:20}}>
-            {[{color:t.accent,label:"我的ETF"},
-              {color:t.text,label:"上证指数",dash:true},
-              {color:t.warn,label:"沪深300",dash:true}].map(l=>(
-              <div key={l.label} style={{display:"flex",alignItems:"center",gap:6}}>
-                <svg width={20} height={10}>
-                  <line x1="0" y1="5" x2="20" y2="5" stroke={l.color}
-                    strokeWidth="2" strokeDasharray={l.dash?"4,3":"none"}/>
-                </svg>
-                <span style={{fontSize:13,color:t.sub}}>{l.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <CompareChart history={visibleHistory} t={t} height={280}/>
+      <div style={{background:CARD,border:`1.5px solid ${BORDER}`,borderRadius:16,
+        padding:"20px 24px",boxShadow:"0 2px 12px rgba(0,0,0,0.04)"}}>
+        <SectionTitle text="同期与指数对比"/>
+        {loading ? (
+          <div style={{height:280,display:"flex",alignItems:"center",
+            justifyContent:"center",color:MUTED,fontSize:13}}>加载数据...</div>
+        ) : (
+          <CompareChart pnlHistory={visiblePnl} indexHistory={visibleIndex} height={280}/>
+        )}
       </div>
     </div>
   );

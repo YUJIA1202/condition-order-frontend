@@ -22,3 +22,5 @@ export const addCondition = (body) =>
 
 export const deleteCondition = (cid) =>
   axios.delete(`${BASE}/conditions/${cid}`).then(r => r.data);
+export const getKline = (code, period = "1d", count = 60) =>
+  axios.get(`${BASE}/kline/${code}`, { params: { period, count } }).then(r => r.data);
