@@ -16,6 +16,14 @@ const GREEN  = "#16a34a";
 function fmt(n,d=3){ return Number(n).toFixed(d); }
 function pct(v,d=2){ return (v>=0?"+":"")+Number(v).toFixed(d)+"%"; }
 function clamp(v,lo,hi){ return Math.max(lo,Math.min(hi,v)); }
+function fmtTime(ts){
+  if(!ts) return "--";
+  return new Date(ts*1000).toLocaleString("zh-CN",{
+    year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit",second:"2-digit",
+    hour12:false,
+  });
+}
 
 const inp = {
   padding:"9px 12px",borderRadius:8,fontSize:13,
@@ -261,14 +269,16 @@ export default function VolumeConditionPage({ stockTicks, volumeTriggered }) {
   const [vwapThr,       setVwapThr]       = useState(1.5);
   const [conditions,    setConditions]    = useState([]);
   const [logs,          setLogs]          = useState([]);
-useEffect(()=>{
-  if(!selectedStock){
-    const t = setTimeout(()=>setPreviewTick(null), 0);
-    return ()=>clearTimeout(t);
-  }
-  fetch(`${API}/stock-tick?code=${encodeURIComponent(selectedStock.code)}`)
-    .then(r=>r.json()).then(setPreviewTick).catch(()=>setPreviewTick(null));
-},[selectedStock]);
+
+  useEffect(()=>{
+    if(!selectedStock){
+      const t=setTimeout(()=>setPreviewTick(null),0);
+      return ()=>clearTimeout(t);
+    }
+    fetch(`${API}/stock-tick?code=${encodeURIComponent(selectedStock.code)}`)
+      .then(r=>r.json()).then(setPreviewTick).catch(()=>setPreviewTick(null));
+  },[selectedStock]);
+
   useEffect(()=>{
     fetch(`${API}/volume-conditions`).then(r=>r.json()).then(setConditions).catch(console.error);
   },[]);
@@ -575,14 +585,22 @@ useEffect(()=>{
                   <div style={{marginTop:10,padding:"6px 10px",background:SURF,borderRadius:6,
                     fontSize:11,color:MUTED,fontFamily:"monospace",border:`1px solid ${BORDER}`}}>
                     ✗ {cond.cancel_reason}
+                    {cond.trigger_time&&(
+                      <span style={{marginLeft:12}}>{fmtTime(cond.trigger_time)}</span>
+                    )}
                   </div>
                 )}
+
                 {isTriggered&&cond.order_result&&(
                   <div style={{marginTop:10,padding:"6px 10px",background:"#f0fdf4",borderRadius:6,
                     fontSize:11,color:GREEN,fontFamily:"monospace",border:"1px solid #86efac"}}>
                     ✓ {cond.order_result.msg}
+                    {cond.trigger_time&&(
+                      <span style={{marginLeft:12,color:MUTED}}>{fmtTime(cond.trigger_time)}</span>
+                    )}
                   </div>
                 )}
+
                 {isExpanded&&<MiniKline code={cond.stock_code}/>}
               </div>
             );
@@ -601,13 +619,13 @@ useEffect(()=>{
               <div style={{padding:"20px 16px",color:MUTED,fontSize:12,textAlign:"center"}}>暂无日志</div>
             )}
             {logs.map((log,i)=>{
-              const ts=log.trigger_time?new Date(log.trigger_time*1000).toLocaleTimeString("zh-CN"):"--:--:--";
+              const ts=fmtTime(log.trigger_time);
               const isCancel=log.status==="cancelled";
               return (
                 <div key={i} style={{display:"flex",alignItems:"flex-start",gap:10,
                   padding:"5px 16px",borderBottom:`1px solid ${BORDER}22`,
                   fontSize:11,fontFamily:"monospace"}}>
-                  <span style={{color:MUTED,flexShrink:0}}>{ts}</span>
+                  <span style={{color:MUTED,flexShrink:0,whiteSpace:"nowrap"}}>{ts}</span>
                   <span style={{color:isCancel?MUTED:GREEN,flexShrink:0}}>{isCancel?"✗ 取消":"✓ 触发"}</span>
                   <span style={{color:log.action==="buy"?BLUE:RED,flexShrink:0}}>
                     {log.action==="buy"?"买":"卖"} {log.stock_code?.split(".")?.[0]}

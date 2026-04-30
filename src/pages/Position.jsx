@@ -1,7 +1,7 @@
 // src/pages/Position.jsx
 import { useState, useEffect } from "react";
 import { getPositions } from "../api/index";
-import * as echarts from "echarts";
+
 
 function fmt(n, d=2) { return Number(n).toFixed(d); }
 function pct(v) { return (v>=0?"+":"")+fmt(v)+"%" ; }

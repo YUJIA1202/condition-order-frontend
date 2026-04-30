@@ -21,12 +21,12 @@ function fullCode(code) {
 }
 
 const PERIODS = [
-  {id:"5m",  label:"5分",  period:"5m",  count:240,  intraday:true},
-  {id:"15m", label:"15分", period:"15m", count:200,  intraday:true},
-  {id:"30m", label:"30分", period:"30m", count:200,  intraday:true},
-  {id:"60m", label:"60分", period:"60m", count:200,  intraday:true},
-  {id:"1d",  label:"日K",  period:"1d",  count:365,  intraday:false},
-  {id:"1w",  label:"周K",  period:"1d",  count:730,  intraday:false, weekly:true},
+  {id:"5m",  label:"5分",  period:"5m",  count:240,  intraday:true,  step:5*60},
+  {id:"15m", label:"15分", period:"15m", count:200,  intraday:true,  step:15*60},
+  {id:"30m", label:"30分", period:"30m", count:200,  intraday:true,  step:30*60},
+  {id:"60m", label:"60分", period:"60m", count:200,  intraday:true,  step:60*60},
+  {id:"1d",  label:"日K",  period:"1d",  count:365,  intraday:false, step:24*3600},
+  {id:"1w",  label:"周K",  period:"1d",  count:730,  intraday:false, step:7*24*3600, weekly:true},
 ];
 
 function toWeekly(bars) {
@@ -47,6 +47,11 @@ function toWeekly(bars) {
     }
   });
   return Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
+}
+
+function toTs(date) {
+  if(typeof date === "number") return date;
+  return new Date(date).getTime() / 1000;
 }
 
 // ─── 画线工具栏 ───────────────────────────────────────────────────
@@ -83,8 +88,8 @@ function Toolbar({ tool, setTool, lines, onDeleteLine, onClearLines }) {
       </>}
       <span style={{fontSize:11,color:MUTED}}>
         {tool==="none"     &&lines.length>0&&"点击 ✕ 删除线条，或按 Delete 键"}
-        {tool==="hline"    &&"点击图表添加水平线（向右自动延伸）"}
-        {tool==="trendline"&&"点击两点画趋势线（向右延伸1年）"}
+        {tool==="hline"    &&"点击图表添加水平线"}
+        {tool==="trendline"&&"点击两点画趋势线（双向延伸）"}
       </span>
       {lines.length>0&&(
         <div style={{width:"100%",display:"flex",flexWrap:"wrap",gap:4,marginTop:2}}>
@@ -110,7 +115,7 @@ function Toolbar({ tool, setTool, lines, onDeleteLine, onClearLines }) {
 }
 
 // ─── K线图 ────────────────────────────────────────────────────────
-function KlineChart({ bars, tool, onAddLine, lines }) {
+function KlineChart({ bars, tool, onAddLine, lines, periodStep }) {
   const containerRef  = useRef();
   const chartRef      = useRef();
   const candleRef     = useRef();
@@ -153,11 +158,22 @@ function KlineChart({ bars, tool, onAddLine, lines }) {
     chartRef.current.timeScale().fitContent();
   },[bars]);
 
+  // 切换周期时清空所有线的 series，等待重建
+  useEffect(()=>{
+    if(!chartRef.current) return;
+    Object.values(lineSeriesMap.current).forEach(s=>{
+      try { chartRef.current.removeSeries(s); } catch { /* ignore */ }
+    });
+    lineSeriesMap.current = {};
+  },[periodStep]);
+
   // 线条同步
   useEffect(()=>{
     if(!chartRef.current||!bars.length) return;
-    const chart   = chartRef.current;
+    const chart    = chartRef.current;
     const existing = new Set(Object.keys(lineSeriesMap.current));
+    const barStart = toTs(bars[0].date);
+    const barEnd   = toTs(bars[bars.length-1].date);
 
     lines.forEach(l=>{
       if(lineSeriesMap.current[l.id]) { existing.delete(l.id); return; }
@@ -168,44 +184,51 @@ function KlineChart({ bars, tool, onAddLine, lines }) {
           priceLineVisible:false, lastValueVisible:true,
           crosshairMarkerVisible:false,
         });
-        // 水平线从第一根K线延伸到1年后
-        const firstTime = typeof bars[0].date==="number"
-          ? bars[0].date
-          : new Date(bars[0].date).getTime()/1000;
-        const farTime = firstTime + 365*24*3600;
-        s.setData([
-          {time: firstTime, value: l.price},
-          {time: farTime,   value: l.price},
-        ]);
+        const points = [];
+        for(let t = barStart; t <= barEnd; t += periodStep) {
+          points.push({ time: t, value: l.price });
+        }
+        // 确保末尾点
+        if(!points.length || points[points.length-1].time < barEnd) {
+          points.push({ time: barEnd, value: l.price });
+        }
+        s.setData(points);
         lineSeriesMap.current[l.id] = s;
 
-      } else if(l.type==="trendline"&&l.p1&&l.p2) {
+      } else if(l.type==="trendline" && l.p1 && l.p2) {
         const s = chart.addSeries(LineSeries, {
           color:l.color, lineWidth:1.5, lineStyle:LineStyle.Solid,
           priceLineVisible:false, lastValueVisible:false,
           crosshairMarkerVisible:false,
         });
-        // 把时间统一转成数字
-        const t1 = typeof l.p1.time==="number" ? l.p1.time : new Date(l.p1.time).getTime()/1000;
-        const t2 = typeof l.p2.time==="number" ? l.p2.time : new Date(l.p2.time).getTime()/1000;
-        const slope    = (t2-t1) !== 0 ? (l.p2.price-l.p1.price)/(t2-t1) : 0;
-        const farTime  = t2 + 365*24*3600; // 1年后
-        const farPrice = l.p2.price + slope*(farTime-t2);
-        s.setData([
-          {time: t1,       value: l.p1.price},
-          {time: t2,       value: l.p2.price},
-          {time: farTime,  value: farPrice},
-        ]);
+        const t1 = toTs(l.p1.time);
+        const t2 = toTs(l.p2.time);
+        const slope  = (t2-t1) !== 0 ? (l.p2.price-l.p1.price)/(t2-t1) : 0;
+        const priceAt = t => l.p1.price + slope * (t - t1);
+
+        const points = [];
+        for(let t = barStart; t <= barEnd; t += periodStep) {
+          points.push({ time: t, value: priceAt(t) });
+        }
+        // 确保首尾点
+        if(!points.length || points[0].time > barStart) {
+          points.unshift({ time: barStart, value: priceAt(barStart) });
+        }
+        if(points[points.length-1].time < barEnd) {
+          points.push({ time: barEnd, value: priceAt(barEnd) });
+        }
+        s.setData(points);
         lineSeriesMap.current[l.id] = s;
       }
       existing.delete(l.id);
     });
 
+    // 删除已移除的线
     existing.forEach(id=>{
       chart.removeSeries(lineSeriesMap.current[id]);
       delete lineSeriesMap.current[id];
     });
-  },[lines, bars]);
+  },[lines, bars, periodStep]);
 
   // 点击事件
   useEffect(()=>{
@@ -224,7 +247,8 @@ function KlineChart({ bars, tool, onAddLine, lines }) {
         } else {
           const p1 = pendingPoint.current;
           const p2 = {time:param.time, price};
-          const [a,b] = p1.time<=p2.time ? [p1,p2] : [p2,p1];
+          const t1 = toTs(p1.time), t2 = toTs(p2.time);
+          const [a,b] = t1<=t2 ? [p1,p2] : [p2,p1];
           onAddLine({type:"trendline", p1:a, p2:b, color:"#7c3aed"});
           pendingPoint.current = null;
           setPendingMsg(false);
@@ -269,13 +293,10 @@ export default function ETFKline({ etf }) {
     getKline(code, periodCfg.period, periodCfg.count)
       .then(raw=>{
         if(cancelled) return;
-        let normalized = raw.map(b=>{
-          const isIntraday = periodCfg.intraday;
-          return {
-            date:  isIntraday ? b.t : new Date(b.t*1000).toISOString().slice(0,10),
-            open:  b.o, high:b.h, low:b.l, close:b.c, vol:b.v, ts:b.t,
-          };
-        });
+        let normalized = raw.map(b=>({
+          date:  periodCfg.intraday ? b.t : new Date(b.t*1000).toISOString().slice(0,10),
+          open:  b.o, high:b.h, low:b.l, close:b.c, vol:b.v, ts:b.t,
+        }));
         if(periodCfg.weekly) normalized = toWeekly(normalized);
         setBars(normalized);
         setLoading(false);
@@ -402,6 +423,7 @@ export default function ETFKline({ etf }) {
           <KlineChart
             bars={bars} tool={tool}
             onAddLine={handleAddLine} lines={lines}
+            periodStep={periodCfg.step}
           />
         ) : (
           <div style={{height:500,display:"flex",alignItems:"center",
